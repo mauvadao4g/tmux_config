@@ -19,7 +19,7 @@ Quase todo atalho começa pelo **prefixo**, que aqui é `Ctrl+b`: aperte `Ctrl+b
 ## Instalação
 
 ```bash
-git clone <url-deste-repositorio> tmux_config
+git clone https://github.com/mauvadao4g/tmux_config.git tmux_config
 cd tmux_config
 ./install.sh
 ```
@@ -237,6 +237,21 @@ Para voltar ao perfil antigo ou mudar o tamanho da fonte, use **Preferências** 
 
 Como `~/.tmux.conf` é um link, basta editar o `tmux.conf` deste repositório e recarregar com `prefixo` `r`.
 
+## Publicar no GitHub
+
+O `publish.sh` envia o repositório para a sua conta do GitHub. Precisa do [GitHub CLI](https://cli.github.com) (`gh`) com login feito.
+
+```bash
+./publish.sh                     # commit com mensagem padrão e push
+./publish.sh "minha mensagem"    # commit com a mensagem dada e push
+```
+
+Na primeira vez ele cria o repositório remoto, privado, com o nome desta pasta. Para criar como público use `./publish.sh --public`; para mudar depois:
+
+```bash
+gh repo edit --visibility public --accept-visibility-change-consequences
+```
+
 ## Problemas comuns
 
 | Sintoma | Solução |
@@ -265,4 +280,5 @@ Depois, apague do `~/.bashrc` as duas linhas marcadas com o comentário `ble.sh`
 |---|---|
 | `tmux.conf` | a configuração |
 | `install.sh` | instalação e configuração automáticas |
+| `publish.sh` | commit e push para o GitHub (cria o repositório remoto na primeira vez) |
 | `completions/tmux-sessions` | autocomplete de nomes de sessão para os atalhos `ta`, `tk` e `t` |
