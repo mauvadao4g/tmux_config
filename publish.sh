@@ -20,7 +20,7 @@ URL_PLACEHOLDER="<url-deste-repositorio>"   # trocado pela URL real no README na
 info() { printf '\033[1;35m>>\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31mxx\033[0m %s\n' "$*" >&2; exit 1; }
 
-usage() { sed -n '2,11s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; }
+usage() { sed -n '2,12s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; }
 
 VISIBILITY="--private"
 MESSAGE=""
