@@ -1,0 +1,12 @@
+# Autocomplete de nomes de sessão do tmux para atalhos como:
+#   alias ta='tmux attach -t'
+#   alias tk='tmux kill-session -t'
+#   t() { tmux new-session -A -s "${1:-main}"; }
+# O install.sh copia este arquivo como "ta", "tk" e "t" na pasta do bash-completion,
+# que carrega cada um quando o Tab é usado no comando de mesmo nome.
+
+_tmux_sessions() {
+    local IFS=$'\n'
+    COMPREPLY=( $(compgen -W "$(tmux list-sessions -F '#{session_name}' 2>/dev/null)" -- "${COMP_WORDS[COMP_CWORD]}") )
+}
+complete -F _tmux_sessions ta tk t
