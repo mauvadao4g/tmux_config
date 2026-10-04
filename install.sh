@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Instala e configura o tmux do zero: pacotes, ~/.tmux.conf, TPM, plugins, fonte Hack Nerd
 # Font, tema Catppuccin Mocha (barra do tmux e perfil do GNOME Terminal) e autocomplete
-# (do comando tmux e, com o ble.sh, de qualquer comando enquanto se digita).
+# do comando tmux. O ble.sh (autocomplete de qualquer comando enquanto se digita) é opcional.
 # Pode ser executado quantas vezes quiser (não refaz o que já está pronto).
 #
 # Uso:
-#   ./install.sh            instala tudo
+#   ./install.sh            instala tudo, menos o ble.sh
+#   ./install.sh --blesh    instala também o ble.sh (as opções podem ser combinadas)
+#   ./install.sh --dev      instala também ferramentas de terminal: ripgrep, fd, bat, zoxide e delta
 #   ./install.sh --update   instala tudo, atualiza os plugins e reinstala tema e autocompletes
 #   ./install.sh --help     mostra esta ajuda
 set -euo pipefail
@@ -23,6 +25,8 @@ THEME_TAG="v2.3.1"
 THEME_DIR="$HOME/.tmux/plugins/catppuccin-tmux"
 
 # Perfil do GNOME Terminal com as mesmas cores do tema e uma Nerd Font (ícones da barra).
+# As cores vêm do temas.sh, que também serve para trocar de tema depois.
+THEMES_SCRIPT="$REPO_DIR/temas.sh"
 PROFILE_NAME="Catppuccin Mocha"
 PROFILE_FONT_FAMILY="Hack Nerd Font Mono"
 PROFILE_FONT_SIZE="16"
@@ -37,6 +41,17 @@ else
     FONT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/fonts"
 fi
 
+# Scripts chamados pelo tmux.conf (ver bin/) e o lazygit, usado pelo Ctrl+b g.
+BIN_DIR="$HOME/.local/bin"
+PROJECTS_SRC="$REPO_DIR/bin/tmux-projetos"
+PROJECTS_DST="$BIN_DIR/tmux-projetos"
+# No Linux o lazygit vem do GitHub (poucas distros o empacotam); o sha256 confere o
+# download. Ao trocar a versão, troque também os dois sha256 (estão no checksums.txt dela).
+LAZYGIT_VERSION="0.65.1"
+LAZYGIT_URL="https://github.com/jesseduffield/lazygit/releases/download/v$LAZYGIT_VERSION"
+LAZYGIT_SHA256_X86_64="02beacbcda0fa342e50ae3480ba8147307353af3fb28e1d5f790e02329c201a6"
+LAZYGIT_SHA256_ARM64="49abecdf6adf4f2dfdb11bf7b9bfada267ea523612ed809d1c6d87f6c04000a7"
+
 # Autocomplete do comando `tmux` no bash (o Ubuntu não traz um). Fixado em um commit
 # porque o arquivo é carregado pelo shell: atualizar exige trocar o hash aqui.
 COMPLETION_REPO="https://github.com/imomaliev/tmux-bash-completion"
@@ -48,7 +63,7 @@ ALIAS_COMPLETION_SRC="$REPO_DIR/completions/tmux-sessions"
 ALIAS_COMPLETION_NAMES="ta tk t"
 
 # ble.sh: sugestões e menu de autocomplete no bash enquanto se digita, como num editor.
-# Também fixado em um commit, pelo mesmo motivo.
+# Também fixado em um commit, pelo mesmo motivo. Só é instalado com --blesh.
 BLESH_REPO="https://github.com/akinomyoga/ble.sh"
 BLESH_COMMIT="d81fd54feb0d996fdff20dca27eaf0201f7015cc"
 BLESH_PREFIX="$HOME/.local"
@@ -59,18 +74,42 @@ info() { printf '\033[1;35m>>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31mxx\033[0m %s\n' "$*" >&2; exit 1; }
 
-usage() { sed -n '2,10s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; }
+usage() { sed -n '2,12s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"; }
 
 UPDATE=0
+BLESH=0
+DEV=0
 for arg in "$@"; do
     case "$arg" in
         -u|--update) UPDATE=1 ;;
+        -b|--blesh)  BLESH=1 ;;
+        -d|--dev)    DEV=1 ;;
         -h|--help)   usage; exit 0 ;;
         *)           usage; die "Opção desconhecida: $arg" ;;
     esac
 done
 
 [ -f "$CONF_SRC" ] || die "Não achei $CONF_SRC"
+
+# Instala pacotes com o gerenciador do sistema: pkg_install <pacote>...
+pkg_install() {
+    if command -v apt-get >/dev/null 2>&1; then
+        sudo apt-get update && sudo apt-get install -y "$@"
+    elif command -v dnf >/dev/null 2>&1; then
+        sudo dnf install -y "$@"
+    elif command -v pacman >/dev/null 2>&1; then
+        sudo pacman -S --needed --noconfirm "$@"
+    elif command -v zypper >/dev/null 2>&1; then
+        sudo zypper install -y "$@"
+    elif command -v brew >/dev/null 2>&1; then
+        brew install "$@"
+    else
+        die "Gerenciador de pacotes não reconhecido. Instale manualmente: $*"
+    fi
+}
+
+# O lazygit baixado pelo script fica em $BIN_DIR, que pode não estar no PATH.
+has_lazygit() { command -v lazygit >/dev/null 2>&1 || [ -x "$BIN_DIR/lazygit" ]; }
 
 # (sem grep -q nos pipes deste script: ele fecha o pipe cedo e o pipefail acusaria erro)
 has_font() {
@@ -94,11 +133,12 @@ fi
 packages=()
 command -v tmux >/dev/null 2>&1 || packages+=(tmux)
 command -v git  >/dev/null 2>&1 || packages+=(git)
-command -v fzf  >/dev/null 2>&1 || packages+=(fzf)      # busca de janelas (Ctrl+b F)
+command -v fzf  >/dev/null 2>&1 || packages+=(fzf)      # busca de janelas e de projetos
+command -v python3 >/dev/null 2>&1 || packages+=(python3)   # plugin extrakto (Ctrl+b e)
 if [ -n "$clip_cmd" ] && ! command -v "$clip_cmd" >/dev/null 2>&1; then
     packages+=("$clip_pkg")
 fi
-if [ ! -f "$BLESH_DST" ] || [ "$UPDATE" -eq 1 ]; then   # só para compilar o ble.sh
+if [ "$BLESH" -eq 1 ] && { [ ! -f "$BLESH_DST" ] || [ "$UPDATE" -eq 1 ]; }; then   # só para compilar o ble.sh
     command -v gawk >/dev/null 2>&1 || packages+=(gawk)
     command -v make >/dev/null 2>&1 || packages+=(make)
 fi
@@ -106,23 +146,17 @@ if ! has_font; then                                     # só para baixar a font
     command -v curl  >/dev/null 2>&1 || packages+=(curl)
     command -v unzip >/dev/null 2>&1 || packages+=(unzip)
 fi
+if ! has_lazygit; then
+    if [ "$(uname)" = "Darwin" ]; then
+        packages+=(lazygit)
+    else                                                # só para baixar o lazygit
+        command -v curl >/dev/null 2>&1 || [[ " ${packages[*]} " == *" curl "* ]] || packages+=(curl)
+    fi
+fi
 
 if [ ${#packages[@]} -gt 0 ]; then
     info "Instalando pacotes: ${packages[*]}"
-    if command -v apt-get >/dev/null 2>&1; then
-        sudo apt-get update
-        sudo apt-get install -y "${packages[@]}"
-    elif command -v dnf >/dev/null 2>&1; then
-        sudo dnf install -y "${packages[@]}"
-    elif command -v pacman >/dev/null 2>&1; then
-        sudo pacman -S --needed --noconfirm "${packages[@]}"
-    elif command -v zypper >/dev/null 2>&1; then
-        sudo zypper install -y "${packages[@]}"
-    elif command -v brew >/dev/null 2>&1; then
-        brew install "${packages[@]}"
-    else
-        die "Gerenciador de pacotes não reconhecido. Instale manualmente: ${packages[*]}"
-    fi
+    pkg_install "${packages[@]}"
 else
     info "Pacotes já instalados"
 fi
@@ -146,6 +180,10 @@ else
     ln -s "$CONF_SRC" "$CONF_DST"
     info "$CONF_DST -> $CONF_SRC"
 fi
+
+# Script do Ctrl+b f (abrir projeto): o tmux.conf o chama por este caminho.
+mkdir -p "$BIN_DIR"
+ln -sfn "$PROJECTS_SRC" "$PROJECTS_DST"
 
 # --- 3. TPM (gerenciador de plugins) e tema ---
 if [ -d "$TPM_DIR/.git" ]; then
@@ -226,7 +264,33 @@ else
     has_font || warn "A fonte foi copiada para $FONT_DIR, mas o sistema ainda não a enxerga."
 fi
 
-# --- 6. Autocomplete do comando tmux no bash ---
+# --- 6. lazygit (git flutuante do Ctrl+b g) ---
+if command -v lazygit >/dev/null 2>&1 && [ ! -x "$BIN_DIR/lazygit" ]; then
+    info "lazygit já instalado pelo sistema"
+elif [ -x "$BIN_DIR/lazygit" ] && [ "$UPDATE" -eq 0 ]; then
+    info "lazygit já instalado"
+else
+    case "$(uname -m)" in
+        x86_64)        lazygit_arch="x86_64" lazygit_sha256="$LAZYGIT_SHA256_X86_64" ;;
+        aarch64|arm64) lazygit_arch="arm64"  lazygit_sha256="$LAZYGIT_SHA256_ARM64" ;;
+        *)             lazygit_arch="" ;;
+    esac
+    if [ -z "$lazygit_arch" ]; then
+        warn "Sem lazygit pronto para $(uname -m); instale manualmente para usar o Ctrl+b g."
+    else
+        info "Baixando o lazygit ($LAZYGIT_VERSION)"
+        curl -fsSL -o "$temp_dir/lazygit.tar.gz" \
+            "$LAZYGIT_URL/lazygit_${LAZYGIT_VERSION}_linux_${lazygit_arch}.tar.gz"
+        if command -v sha256sum >/dev/null 2>&1; then
+            echo "$lazygit_sha256  $temp_dir/lazygit.tar.gz" | sha256sum -c --quiet - \
+                || die "O arquivo do lazygit não confere com o sha256 esperado"
+        fi
+        tar -xzf "$temp_dir/lazygit.tar.gz" -C "$temp_dir" lazygit
+        install -m 755 "$temp_dir/lazygit" "$BIN_DIR/lazygit"
+    fi
+fi
+
+# --- 7. Autocomplete do comando tmux no bash ---
 # O bash-completion carrega sozinho os arquivos dessa pasta, sem mexer no ~/.bashrc.
 if [ -f "$COMPLETION_DST" ] && [ "$UPDATE" -eq 0 ]; then
     info "Autocomplete do tmux já instalado"
@@ -240,43 +304,80 @@ for name in $ALIAS_COMPLETION_NAMES; do
     cp "$ALIAS_COMPLETION_SRC" "$COMPLETION_DIR/$name"
 done
 
-# --- 7. ble.sh: autocomplete de comandos enquanto se digita ---
-if [ -f "$BLESH_DST" ] && [ "$UPDATE" -eq 0 ]; then
-    info "ble.sh já instalado"
+# --- 8. ble.sh: autocomplete de comandos enquanto se digita (opcional, com --blesh) ---
+if [ "$BLESH" -eq 0 ]; then
+    info "ble.sh não instalado (use --blesh para instalar)"
 else
-    info "Instalando o ble.sh"
-    fetch_commit "$BLESH_REPO" "$BLESH_COMMIT" "$temp_dir/blesh"
-    git -C "$temp_dir/blesh" submodule --quiet update --init --recursive --depth 1
-    make -C "$temp_dir/blesh" install PREFIX="$BLESH_PREFIX" >/dev/null
-fi
-
-# O ble.sh precisa de uma linha no começo do ~/.bashrc e outra no fim.
-if grep -qs 'blesh/ble.sh' "$BASHRC"; then
-    info "$BASHRC já carrega o ble.sh"
-else
-    if [ -f "$BASHRC" ]; then
-        backup="$BASHRC.bak.$(date +%Y%m%d-%H%M%S)"
-        cp -p "$BASHRC" "$backup"
-        info "$BASHRC antigo salvo em $backup"
+    if [ -f "$BLESH_DST" ] && [ "$UPDATE" -eq 0 ]; then
+        info "ble.sh já instalado"
+    else
+        info "Instalando o ble.sh"
+        fetch_commit "$BLESH_REPO" "$BLESH_COMMIT" "$temp_dir/blesh"
+        git -C "$temp_dir/blesh" submodule --quiet update --init --recursive --depth 1
+        make -C "$temp_dir/blesh" install PREFIX="$BLESH_PREFIX" >/dev/null
     fi
-    {
-        echo '# ble.sh: autocomplete de comandos enquanto digita (primeira parte; a segunda fica no fim do arquivo)'
-        echo '[[ $- == *i* ]] && source -- ~/.local/share/blesh/ble.sh --attach=none'
-        echo
-        [ -f "$BASHRC" ] && cat "$BASHRC"
-        echo
-        echo '# ble.sh: ativa depois que todo o resto do ~/.bashrc carregou (manter no fim do arquivo)'
-        echo '[[ ! ${BLE_VERSION-} ]] || ble-attach'
-    } > "$temp_dir/bashrc"
-    cat "$temp_dir/bashrc" > "$BASHRC"   # cat em vez de mv: preserva permissões e link, se houver
-    info "ble.sh adicionado ao $BASHRC"
+
+    # O ble.sh precisa de uma linha no começo do ~/.bashrc e outra no fim.
+    # (linhas comentadas não contam: quem desativou na mão pode reativar com --blesh)
+    if grep -qs '^[^#]*blesh/ble\.sh' "$BASHRC"; then
+        info "$BASHRC já carrega o ble.sh"
+    else
+        if [ -f "$BASHRC" ]; then
+            backup="$BASHRC.bak.$(date +%Y%m%d-%H%M%S)"
+            cp -p "$BASHRC" "$backup"
+            info "$BASHRC antigo salvo em $backup"
+        fi
+        {
+            echo '# ble.sh: autocomplete de comandos enquanto digita (primeira parte; a segunda fica no fim do arquivo)'
+            echo '[[ $- == *i* ]] && source -- ~/.local/share/blesh/ble.sh --attach=none'
+            echo
+            [ -f "$BASHRC" ] && cat "$BASHRC"
+            echo
+            echo '# ble.sh: ativa depois que todo o resto do ~/.bashrc carregou (manter no fim do arquivo)'
+            echo '[[ ! ${BLE_VERSION-} ]] || ble-attach'
+        } > "$temp_dir/bashrc"
+        cat "$temp_dir/bashrc" > "$BASHRC"   # cat em vez de mv: preserva permissões e link, se houver
+        info "ble.sh adicionado ao $BASHRC"
+    fi
 fi
 
-# --- 8. Perfil do GNOME Terminal (cores e fonte do terminal) ---
+# --- 9. Ferramentas de terminal para programar (opcional, com --dev) ---
+if [ "$DEV" -eq 1 ]; then
+    # No apt e no dnf o pacote do fd se chama fd-find.
+    if command -v apt-get >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1; then
+        fd_pkg="fd-find"
+    else
+        fd_pkg="fd"
+    fi
+    dev_packages=()
+    command -v rg >/dev/null 2>&1 || dev_packages+=(ripgrep)
+    command -v fd >/dev/null 2>&1 || command -v fdfind >/dev/null 2>&1 || dev_packages+=("$fd_pkg")
+    command -v bat >/dev/null 2>&1 || command -v batcat >/dev/null 2>&1 || dev_packages+=(bat)
+    command -v zoxide >/dev/null 2>&1 || dev_packages+=(zoxide)
+    command -v delta  >/dev/null 2>&1 || dev_packages+=(git-delta)
+
+    if [ ${#dev_packages[@]} -eq 0 ]; then
+        info "Ferramentas de terminal já instaladas"
+    else
+        info "Instalando ferramentas de terminal: ${dev_packages[*]}"
+        pkg_install "${dev_packages[@]}" \
+            || warn "Não consegui instalar todas; veja a mensagem acima e instale as que faltaram."
+    fi
+
+    # O Debian/Ubuntu instala o fd como fdfind e o bat como batcat: cria os nomes usuais.
+    for pair in "fdfind:fd" "batcat:bat"; do
+        if ! command -v "${pair#*:}" >/dev/null 2>&1 && command -v "${pair%:*}" >/dev/null 2>&1; then
+            ln -sfn "$(command -v "${pair%:*}")" "$BIN_DIR/${pair#*:}"
+        fi
+    done
+    info "zoxide e delta precisam ser ativados; veja 'Ferramentas de terminal' no README."
+fi
+
+# --- 10. Perfil do GNOME Terminal (cores e fonte do terminal) ---
+# Só cria na primeira vez; depois, o tema do terminal é trocado com o temas.sh.
 PROFILES="org.gnome.Terminal.ProfilesList"
 PROFILE_SCHEMA="org.gnome.Terminal.Legacy.Profile"
 PROFILE_PATH="/org/gnome/terminal/legacy/profiles:"
-profile_set() { gsettings set "$PROFILE_SCHEMA:$PROFILE_PATH/:$1/" "$2" "$3"; }
 
 if ! command -v gsettings >/dev/null 2>&1 || ! gsettings list-schemas | grep -x "$PROFILES" >/dev/null; then
     info "GNOME Terminal não encontrado: perfil de cores não criado"
@@ -290,36 +391,11 @@ else
     if [ -n "$profile_id" ]; then
         info "Perfil '$PROFILE_NAME' do GNOME Terminal já existe"
     else
-        profile_id="$(cat /proc/sys/kernel/random/uuid)"
-        profile_set "$profile_id" visible-name "$PROFILE_NAME"
-        profile_set "$profile_id" use-theme-colors false
-        profile_set "$profile_id" background-color '#1e1e2e'
-        profile_set "$profile_id" foreground-color '#cdd6f4'
-        profile_set "$profile_id" bold-color-same-as-fg true
-        profile_set "$profile_id" cursor-colors-set true
-        profile_set "$profile_id" cursor-background-color '#f5e0dc'
-        profile_set "$profile_id" cursor-foreground-color '#1e1e2e'
-        profile_set "$profile_id" highlight-colors-set true
-        profile_set "$profile_id" highlight-background-color '#585b70'
-        profile_set "$profile_id" highlight-foreground-color '#cdd6f4'
-        profile_set "$profile_id" palette "['#45475a', '#f38ba8', '#a6e3a1', '#f9e2af', '#89b4fa', '#f5c2e7', '#94e2d5', '#bac2de', '#585b70', '#f38ba8', '#a6e3a1', '#f9e2af', '#89b4fa', '#f5c2e7', '#94e2d5', '#a6adc8']"
-        if has_font; then
-            profile_set "$profile_id" use-system-font false
-            profile_set "$profile_id" font "$PROFILE_FONT_FAMILY $PROFILE_FONT_SIZE"
-        fi
-
-        # Acrescenta à lista de perfis e deixa como padrão (os perfis existentes não mudam).
-        old_list="$(gsettings get "$PROFILES" list)"
-        case "$old_list" in
-            *"'"*) new_list="${old_list%]}, '$profile_id']" ;;
-            *)     new_list="['$profile_id']" ;;
-        esac
-        gsettings set "$PROFILES" list "$new_list"
-        gsettings set "$PROFILES" default "$profile_id"
-        info "Perfil '$PROFILE_NAME' criado no GNOME Terminal e definido como padrão"
-        info "Vale para janelas novas do terminal; nas abertas, troque em Terminal > Alterar perfil"
+        PROFILE_FONT_FAMILY="$PROFILE_FONT_FAMILY" PROFILE_FONT_SIZE="$PROFILE_FONT_SIZE" \
+            "$THEMES_SCRIPT" "$PROFILE_NAME"
     fi
 fi
 
 info "Pronto! Abra o tmux com 'tmux' (sessões já abertas foram recarregadas)."
 info "Os autocompletes valem a partir do próximo terminal aberto."
+info "Para trocar as cores do terminal, rode ./temas.sh"

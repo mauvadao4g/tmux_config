@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Abre um projeto numa sessão do tmux: lista com o fzf as pastas de projetos (as mexidas
+# por último primeiro) e entra na sessão com o nome da pasta escolhida, criando-a se não
+# existir. É chamado pelo Ctrl+b f (ver tmux.conf).
+#
+# As pastas onde ficam os projetos vêm da opção @projects_dirs do tmux.conf, separadas
+# por ":" (ex.: "~/GITHUB/repositorios:~/trabalho").
+set -euo pipefail
+
+dirs="$(tmux show-option -gqv @projects_dirs)"
+[ -n "$dirs" ] || { echo "Defina @projects_dirs no tmux.conf"; read -r _; exit 1; }
+
+list_projects() {
+    local dir
+    while IFS= read -r -d: dir; do
+        dir="${dir/#\~/$HOME}"
+        [ -d "$dir" ] || continue
+        ls -dt -- "$dir"/*/ 2>/dev/null || true
+    done <<< "$dirs:"
+}
+
+choice="$(list_projects | sed 's:/$::' | fzf --reverse --prompt='projeto> ')" || exit 0
+
+# O tmux não aceita "." nem ":" em nome de sessão.
+name="$(basename "$choice" | tr '.: ' '___')"
+if ! tmux has-session -t "=$name" 2>/dev/null; then
+    tmux new-session -d -s "$name" -c "$choice"
+fi
+tmux switch-client -t "=$name"
